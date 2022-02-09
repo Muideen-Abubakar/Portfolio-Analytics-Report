@@ -1,0 +1,265 @@
+---
+title: "Portfolio Analytics Report"
+author: "Analyst: Muideen Abubakar"
+date: "Date: `r Sys.Date()`"
+output: 
+  html_document:
+    df_print: paged 
+    number_sections: no
+    theme: simplex
+    highlight: kate
+    toc: yes
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+params:
+  TraderID: DGR1983
+  TradeDate: 2021-11-12
+  InceptionDate: 2020-01-06
+---
+
+### Introduction
+
+Sequel to the request from the front office, this report seeks to analyse the portfolio of trader **`r params$TraderID`** and generate a report on their portfolio. The report will convey the details of the main allocations and historical trends, particularly for the end of day allocation on **`r params$TradeDate`**. In addition, the report will indicate the performance and risk metrics for this trader's portfolio via tables and charts which will aid the front office to monitor the trader's trading activity. 
+<br><br>
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Import Packages
+library(lubridate)
+library(dplyr)
+library(stringi)
+library(RSQLite)             
+library(mongolite)
+library(ggplot2)
+library(quantmod)
+library(PerformanceAnalytics)
+library(tidyquant)
+library(plotrix)
+library(scales)
+library(dygraphs)
+library(timetk)
+
+```
+
+```{r echo=FALSE, message=TRUE, warning=TRUE}
+#Set up directory and load Config and Params
+#Args = c("C:/Users/user/Documents/BigData_in_Q.fin/Coursework/Coursework1/MuideenAbubakar/3.CourseworkThree", "script.config", "script.params")
+
+Args <- commandArgs(TRUE)
+
+setwd(Args[1])
+
+#getwd()
+
+# Source config
+source(paste0("./Config/", Args[2]))
+
+# Source params
+source(paste0("./Config/", Args[3]))
+
+#Set up connection with MongoDB and SQL
+conMongo <- mongo(collection = "CourseworkTwo", db = "Equity", url = "mongodb://localhost",
+                  verbose = FALSE, options = ssl_options())
+
+conSql <- dbConnect(RSQLite::SQLite(), Config$Directories$SQLDataBase)
+```
+
+```{r echo=FALSE, message=TRUE, warning=TRUE}
+
+#Trade Allocations 
+Database <- conMongo$find()
+SelectedTraderPositions <- Database[Database$Trader == params$TraderID, ]
+Allocation <- SelectedTraderPositions[grep(params$TradeDate, SelectedTraderPositions$DateTime), ]
+
+```
+
+### Trade Allocation
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+#Remodify the Allocation table by reducing it to the most relevant columns 
+RelevantCols <- c("Symbol", "Notional", "Quantity")
+Allocation_1 <- Allocation[RelevantCols]
+
+Allocation_1 <- arrange(Allocation_1, Symbol) #sort the Symbols alphabetically
+
+#Aggregates the Notional and Quantity based on Symbol
+Allocation_2 <- aggregate(. ~ Symbol, data = Allocation_1, FUN = sum)
+
+#Print end of day Allocation
+Allocation_2
+
+```
+
+### Portfolio size (USD)
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Compute the marked-to-market portfolio size (based on current prices)
+#Get latest price data from Yahoo Finance
+
+#Some companies have changed their tickers, so change the Symbols to match the ticker as quoted on Yahoo Finance
+Allocation_2$Symbol[Allocation_2$Symbol == "SYMC"] <- "SYMC.VI" 
+Allocation_2$Symbol[Allocation_2$Symbol == "BRK.B"] <- "BRK-B"
+Allocation_2$Symbol[Allocation_2$Symbol == "BHGE"] <- "BKR"
+Allocation_2$Symbol[Allocation_2$Symbol == "HRS"] <- "HRS.DU"
+
+CurrentPrice <- getQuote(Allocation_2$Symbol, what=yahooQF("Last Trade (Price Only)")) 
+
+Allocation_2$CurrentPrice <- CurrentPrice$Last
+
+Portfolio_Size <- sum(Allocation_2$Quantity * Allocation_2$CurrentPrice)
+
+label_comma()(Portfolio_Size)
+
+```
+
+### Return Analysis {.tabset .tabset-fade .tabset-pills}
+
+#### Return to Date (%)
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+#Calculate Portfolio Performance
+#The performance of the portfolio is assessed on four different metrics;
+
+# a.Return-to-Date (Nov-12 portfolio value vs the market value of the portfolio using marked-to-market prices) 
+#Compute the average unit price
+Allocation_2$UnitPrice <- Allocation_2$Notional/Allocation_2$Quantity
+
+#Compute the return per stock based on current market price
+Allocation_2$Return <- ((Allocation_2$CurrentPrice/Allocation_2$UnitPrice)-1)*100
+
+#Compute the weight of each stock relative to the portfolio size
+Allocation_2$Weight <- (Allocation_2$Notional/Portfolio_Size)
+
+#Compute the weighted return for each stock
+Allocation_2$WeightedReturn <- Allocation_2$Return*Allocation_2$Weight
+
+#Compute the overall portfolio weighted return to date
+ReturnToDate <- sum(Allocation_2$WeightedReturn)
+
+round(ReturnToDate, 2)
+```
+
+#### Since Inception (%)
+```{r echo=FALSE, message=TRUE, warning=TRUE}
+
+# b. Return from inception (i.e. compare the current portfolio value to what it was when it started in Jan-06-20)
+
+# Get the portfolio allocation at inception
+AllocInception <- SelectedTraderPositions[grep(params$InceptionDate, SelectedTraderPositions$DateTime), ]
+AllocInception <- AllocInception[, c("Symbol", "Quantity", "Notional")]
+
+#Aggregate based on Quantity and Notional
+Agg_AllocInception <- aggregate(. ~ Symbol, data = AllocInception, FUN = sum)
+
+SinceInception <- (sum(Allocation_2$Notional)/sum(Agg_AllocInception$Notional)-1)*100
+
+round(SinceInception,2)
+```
+
+#### 1-Day Return (%)
+```{r echo=FALSE, message=TRUE, warning=TRUE}
+# c. 1-day return (which compares the value of the portfolio on Nov-12 to the value on Nov-11)
+
+AllocDay11 <- SelectedTraderPositions[grep(as.Date(params$TradeDate)-1, SelectedTraderPositions$DateTime), ]
+AllocDay11 <- AllocDay11[, c("Symbol", "Quantity", "Notional")]
+
+#Aggregate based on Quantity and Notional
+Agg_AllocDay11 <- aggregate(. ~ Symbol, data = AllocDay11, FUN = sum)
+
+Day12Return <- (sum(Allocation_2$Notional)/sum(Agg_AllocDay11$Notional)-1)*100
+
+round(Day12Return, 2)
+```
+
+#### Alpha Return (%)
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# d. Alpha return, using the S&P 500 as benchmark
+
+#Get the S&P Index level as at params$TradeDate
+GSPC <- getSymbols("^GSPC", from = params$TradeDate, to = as.Date(params$TradeDate)+1, warnings = FALSE, auto.assign = FALSE)
+SP500_1 <- head(GSPC)
+SP500_1 <- SP500_1$GSPC.Adjusted
+SP500_1 <- as.numeric(SP500_1)
+
+SP500_Current <- getQuote("^GSPC", what=yahooQF("Last Trade (Price Only)")) 
+SP500_Current <- SP500_Current$Last
+
+Rb <- as.numeric(((SP500_Current/SP500_1)-1)*100)
+
+Alpha = ReturnToDate - Rb
+round(Alpha, 2)
+
+#Risk-free rate (US 10-yr Treasury)
+#Get the risk-free rate (US 10-yr Treasury yield) from Yahoo Finance
+Rf <- getQuote("^TNX", what=yahooQF("Last Trade (Price Only)")) 
+Rf <- Rf$Last
+```
+
+### Portfolio Risk Metrics {.tabset .tabset-fade .tabset-pills}
+
+#### Standard Deviation
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+StandardDev <- StdDev(Allocation_2$WeightedReturn)
+as.numeric(round(StandardDev, 2))
+```
+
+#### Sharpe Ratio
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+SharpeRatio <- (ReturnToDate - Rf)/StandardDev
+as.numeric(round(SharpeRatio, 2))
+```
+
+#### Tracking Error
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+TrackingErr <- StdDev(Allocation_2$WeightedReturn - Rb)^0.5
+as.numeric(round(TrackingErr, 2))
+```
+
+#### Information Ratio
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+InformationRatio <- (ReturnToDate-Rb)/TrackingErr
+as.numeric(round(InformationRatio, 2))
+```
+
+### Top Holdings {.tabset .tabset-fade .tabset-pills}
+
+#### Table
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Sort Allocation_2 in descending order by Weight
+Desc_Allocation_2 <- Allocation_2[order(-Allocation_2$Weight),]
+
+#Convert the weights to %
+Desc_Allocation_2$Weight <- round(Desc_Allocation_2$Weight *100,2)
+
+#Include only Symbols and the weights
+TopHoldings <- Desc_Allocation_2[, c("Symbol", "Weight")]
+
+#Reorder the row numberings
+rownames(TopHoldings) <- 1:nrow(TopHoldings)
+
+TopTenHoldings <- head(TopHoldings, 10)
+
+TopTenHoldings
+```
+
+#### Chart
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+TopTenHoldingsPie <- pie3D(TopTenHoldings$Weight, border = "white", labels = TopTenHoldings$Symbol, labelcex = 0.75, explode = 0.15, shade = 0.3)
+
+```
+
+### Historical Price Trend {.tabset .tabset-fade .tabset-pills}
+
+#### Relative stock performance
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Tickers = c(TopTenHoldings$Symbol)
+stocks <- tq_get(Tickers, from = params$InceptionDate)
+
+stocks %>% 
+  dplyr::select(symbol, date, adjusted) %>% 
+  tidyr::spread(key = symbol, value = adjusted) %>% 
+  timetk::tk_xts() %>% 
+  dygraph() %>%
+  dyRebase(value = 100) %>% 
+  dyRangeSelector()
+
+```
