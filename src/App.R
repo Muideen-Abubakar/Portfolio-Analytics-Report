@@ -1,8 +1,6 @@
 #--------------------------------------------------------------------------------------
-# UCL -- Institute of Finance & Technology
 # Student Name  : Muideen Abubakar
-# Student Number : 21125043
-# Coursework Three : Use Case One
+# Doc Title : Full code
 #--------------------------------------------------------------------------------------
 
 #Import Packages
