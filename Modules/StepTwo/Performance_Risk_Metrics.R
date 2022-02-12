@@ -1,8 +1,5 @@
 #--------------------------------------------------------------------------------------
-# UCL -- Institute of Finance & Technology
-# Student Name  : Muideen Abubakar
-# Student Number : 21125043
-# Coursework Three : Use Case One 
+# Name  : Muideen Abubakar
 # Step Two : Performance and Risk Metrics
 #--------------------------------------------------------------------------------------
 
